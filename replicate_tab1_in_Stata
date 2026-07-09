@@ -1,0 +1,391 @@
+*** do 021-Table01v241116
+ ** Table 1: Descriptive Statistics
+ ** Compatibility version for missing d_whiteflight_balanced.dta
+
+capture log close _all
+clear all
+set matsize 800
+set scheme plotplain
+set mem 400000k
+set linesize 100
+set more off
+
+local log "`c(tmpdir)'021-Table01v241116.log"
+local dsold "d_whiteflight_balanced"
+local tag "021-Table01v241116"
+local num "021"
+
+****************************************************
+* Create temporary workspace
+****************************************************
+
+local workdir "`c(tmpdir)'whiteflight_table1_work"
+capture mkdir "`workdir'"
+capture mkdir "`workdir'/data"
+
+cd "`workdir'"
+
+****************************************************
+* Download the available public enrollment dataset
+****************************************************
+
+display as text "Downloading available public enrollment dataset..."
+
+capture copy ///
+    "https://raw.githubusercontent.com/HigherEdData/White-Flight/main/data/d_hsi_white_enrollment_final3.dta" ///
+    "`workdir'/d_hsi_white_enrollment_final3.dta", replace
+
+capture confirm file "`workdir'/d_hsi_white_enrollment_final3.dta"
+
+if _rc {
+    display as error "Could not download d_hsi_white_enrollment_final3.dta."
+    display as error "This may be an internet or Virtual Sites issue."
+    exit 601
+}
+
+****************************************************
+* Make the missing Table 1 dataset name as an alias
+****************************************************
+
+copy "`workdir'/d_hsi_white_enrollment_final3.dta" ///
+     "`workdir'/d_whiteflight_balanced.dta", replace
+
+copy "`workdir'/d_hsi_white_enrollment_final3.dta" ///
+     "`workdir'/data/d_whiteflight_balanced.dta", replace
+
+display as result "Created temporary alias:"
+display as result "`workdir'/d_whiteflight_balanced.dta"
+
+****************************************************
+* Open dataset using the author's expected name
+****************************************************
+
+use "`dsold'", clear
+
+****************************************************
+* Recreate balanced-panel variables if absent
+****************************************************
+
+capture confirm variable missingpanel
+if _rc {
+    gen missingpanel = .
+}
+
+capture confirm variable maxyear
+if _rc {
+    bysort unitid: egen maxyear = max(year)
+}
+
+capture confirm variable minyear
+if _rc {
+    bysort unitid: egen minyear = min(year)
+}
+
+capture confirm variable missingpanelall
+if _rc {
+    bysort unitid: egen missingpanelall = min(missingpanel)
+}
+
+capture confirm variable alwaystreated
+if _rc {
+    bysort unitid: egen alwaystreated = min(hispserve)
+}
+
+capture confirm variable evertreated
+if _rc {
+    bysort unitid: egen evertreated = max(hispserve)
+}
+
+****************************************************
+* Check for variables Table 1 needs
+****************************************************
+
+local needed ///
+    hispserveyeardiff ///
+    cpopwh cpopbl cpophi cpopas cpopam ///
+    populationwh populationbl populationhi populationas populationam ///
+    hispserveyear pcttefhispt fips ///
+    teftotlt admitpct ftfefwhitt ///
+    lnftfefwhitt lnftfeftotlt ///
+    unitid year hispserve ///
+    missingpanel missingpanelall maxyear minyear alwaystreated evertreated
+
+local missing ""
+
+foreach v of local needed {
+    capture confirm variable `v'
+    if _rc {
+        local missing "`missing' `v'"
+    }
+}
+
+if "`missing'" != "" {
+    display as error "The dataset opened, but these Table 1 variables are missing:"
+    display as error "`missing'"
+    display as text "This means we need to reconstruct these variables before Table 1 can run."
+    exit 111
+}
+
+log using "`log'", text replace
+
+quietly {
+
+    gen switchers = (hispserveyeardiff<.)
+    foreach var of varlist cpopwh cpopbl cpophi cpopas cpopam populationwh populationbl populationhi populationas populationam {
+        qui gen k`var' = `var' / 1000
+    }
+    rename kpopulationwh kpopwh 
+    rename kpopulationbl kpopbl 
+    rename kpopulationhi kpophi 
+    rename kpopulationas kpopas 
+    rename kpopulationam kpopam
+
+    label var kcpopwh "county 18-24 white"
+    label var kcpopbl "county 18-24 black"
+    label var kcpophi "county 18-24 Latinx"
+    label var kcpopas "county 18-24 Asian"
+    label var kcpopam "county 18-24 Am. In."
+    label var kpopwh "state 18-24 white"
+    label var kpopbl "state 18-24 black"
+    label var kpophi "state 18-24 Latinx"
+    label var kpopas "state 18-24 Asian"
+    label var kpopam "state 18-24 Am. In."
+    label var hispserveyear "first year HSI"
+    label var pcttefhispt "% undergrad Latinx"
+
+    quietly gen region6 = 3 if fips==1   
+    quietly replace region6 = 6 if fips==2   
+    quietly replace region6 = 5 if fips==4   
+    quietly replace region6 = 3 if fips==5   
+    quietly replace region6 = 6 if fips==6   
+    quietly replace region6 = 6 if fips==8   
+    quietly replace region6 = 1 if fips==9   
+    quietly replace region6 = 2 if fips==10   
+    quietly replace region6 = 2 if fips==11   
+    quietly replace region6 = 3 if fips==12   
+    quietly replace region6 = 3 if fips==13   
+    quietly replace region6 = 6 if fips==15   
+    quietly replace region6 = 6 if fips==16   
+    quietly replace region6 = 4 if fips==17   
+    quietly replace region6 = 4 if fips==18   
+    quietly replace region6 = 4 if fips==19   
+    quietly replace region6 = 4 if fips==20   
+    quietly replace region6 = 3 if fips==21   
+    quietly replace region6 = 3 if fips==22   
+    quietly replace region6 = 1 if fips==23   
+    quietly replace region6 = 2 if fips==24   
+    quietly replace region6 = 1 if fips==25   
+    quietly replace region6 = 4 if fips==26   
+    quietly replace region6 = 4 if fips==27   
+    quietly replace region6 = 3 if fips==28   
+    quietly replace region6 = 4 if fips==29   
+    quietly replace region6 = 6 if fips==30   
+    quietly replace region6 = 4 if fips==31   
+    quietly replace region6 = 6 if fips==32   
+    quietly replace region6 = 1 if fips==33   
+    quietly replace region6 = 2 if fips==34   
+    quietly replace region6 = 5 if fips==35   
+    quietly replace region6 = 2 if fips==36   
+    quietly replace region6 = 3 if fips==37   
+    quietly replace region6 = 4 if fips==38   
+    quietly replace region6 = 4 if fips==39   
+    quietly replace region6 = 5 if fips==40   
+    quietly replace region6 = 6 if fips==41   
+    quietly replace region6 = 2 if fips==42   
+    quietly replace region6 = 1 if fips==44   
+    quietly replace region6 = 3 if fips==45   
+    quietly replace region6 = 4 if fips==46   
+    quietly replace region6 = 3 if fips==47   
+    quietly replace region6 = 5 if fips==48   
+    quietly replace region6 = 6 if fips==49   
+    quietly replace region6 = 1 if fips==50   
+    quietly replace region6 = 3 if fips==51   
+    quietly replace region6 = 6 if fips==53   
+    quietly replace region6 = 3 if fips==54   
+    quietly replace region6 = 4 if fips==55   
+    quietly replace region6 = 6 if fips==56   
+
+    qui xi i.region6, noomit
+    qui label var _Iregion6_1 "Northeast"
+    qui label var _Iregion6_2 "Mid-Atlantic"
+    qui label var _Iregion6_3 "South"
+    qui label var _Iregion6_4 "Midwest"
+    qui label var _Iregion6_5 "Southwest"
+    qui label var _Iregion6_6 "West"
+
+    qui lab var teftotlt "undergrads"
+    qui lab var admitpct "Admissions rate (%)"
+    qui lab var ftfefwhitt "Fulltime frosh enrol"
+
+*** New restrictions // 11/17/2024
+
+    // drop if lnftfefwhitt==. | lnftfefhispt==. // old
+    drop if lnftfefwhitt==.
+    drop if year==1990 & hispserve==1
+    // gen missingpanel=. // already defined 24/11/17
+    sort unitid year
+    // bysort unitid: egen maxyear=max(year) // already defined 24/11/17 
+    // bysort unitid: egen minyear=min(year) // already defined 24/11/17
+    bysort unitid (year): replace missingpanel=1 if year[_n-1]!=year-1 | lnftfefwhitt==. | lnftfeftotlt==.
+    replace missingpanel=. if year==1990 & lnftfefwhitt!=. & lnftfeftotlt!=.
+    // bysort unitid: egen missingpanelall=min(missingpanel) // already defined 24/11/17
+    replace missingpanelall=1 if maxyear!=2019 | minyear !=1990
+    // bysort unitid: egen alwaystreated=min(hispserve) // already defined 24/11/17
+    // bysort unitid: egen evertreated=max(hispserve) // already defined 24/11/17
+    drop if alwaystreated==1
+    drop if missingpanelall==1
+    xtset unitid year
+
+*** Show counts for switchers and non-switchers
+
+  * Switcher schools
+    qui count if hispserveyear==year
+    local N1 = r(N)
+
+  * Switcher schools/years
+    qui count if hispserveyear!=.
+    local N2 = r(N)
+
+  * Non-switcher schools
+    qui count if minyear==year & hispserveyear==.
+    local N3 = r(N)
+
+  * Non-switcher schools/years
+    qui count if hispserveyear==.
+    local N4 = r(N)
+
+    foreach num of numlist 1 2 3 4 {
+        di
+        if `num'==1 {
+            dis "===> `N1' switcher schools" 
+        }
+        if `num'==2 {
+            display "===> `N2' switcher schools/years"
+        }
+        if `num'==3 {
+            dis "===> `N3' non-switcher schools"
+        }
+        if `num'==4 {
+            display "===> `N4' non-switcher schools/years"
+        }
+    }
+
+*** Create Table 1
+
+****************************************************
+* Create publication-style Table 1 display
+****************************************************
+
+set linesize 120
+
+capture program drop pubrow
+program define pubrow
+    syntax varname, LABEL(string) TYPE(string)
+
+    quietly summarize `varlist' if switchers == 1
+    local mn1 = r(mean)
+    local sd1 = r(sd)
+    local n1  = r(N)
+
+    quietly summarize `varlist' if switchers == 0
+    local mn2 = r(mean)
+    local sd2 = r(sd)
+    local n2  = r(N)
+
+    if "`type'" == "decimal" {
+        local mn1s : display %10.2f `mn1'
+        local sd1s : display %10.2f `sd1'
+
+        if `n2' == 0 {
+            local mn2s "        --"
+            local sd2s "        --"
+        }
+        else {
+            local mn2s : display %10.2f `mn2'
+            local sd2s : display %10.2f `sd2'
+        }
+    }
+
+    if "`type'" == "integer" {
+        local mn1s : display %10.0fc `mn1'
+        local sd1s : display %10.0fc `sd1'
+
+        if `n2' == 0 {
+            local mn2s "        --"
+            local sd2s "        --"
+        }
+        else {
+            local mn2s : display %10.0fc `mn2'
+            local sd2s : display %10.0fc `sd2'
+        }
+    }
+
+    if "`type'" == "pop" {
+        local mn1s : display %10.0fc (`mn1' * 1000)
+        local sd1s : display %10.0fc (`sd1' * 1000)
+
+        if `n2' == 0 {
+            local mn2s "        --"
+            local sd2s "        --"
+        }
+        else {
+            local mn2s : display %10.0fc (`mn2' * 1000)
+            local sd2s : display %10.0fc (`sd2' * 1000)
+        }
+    }
+
+    display as text _col(2) "`label'" ///
+        _col(39) as result "`mn1s'" ///
+        _col(52) as result "`sd1s'" ///
+        _col(68) as result "`mn2s'" ///
+        _col(81) as result "`sd2s'"
+end
+
+
+noisily display as text ""
+noisily display as text "Table 1. Demographic Characteristics for Four-Year Public Universities in the Analyses."
+noisily display as text "{hline 94}"
+noisily display as text _col(39) "HSI switcher schools" _col(68) "Nonswitcher schools"
+noisily display as text _col(39) "--------------------" _col(68) "-------------------"
+noisily display as text _col(43) "M" _col(56) "SD" _col(72) "M" _col(84) "SD"
+noisily display as text "{hline 94}"
+
+noisily pubrow teftotlt,      label("Total enrollment")                 type(integer)
+noisily pubrow hispserveyear, label("First year HSI")                   type(decimal)
+
+noisily display as text "Census region"
+noisily pubrow _Iregion6_1,   label("  Northeast")                      type(decimal)
+noisily pubrow _Iregion6_2,   label("  Mid-Atlantic")                   type(decimal)
+noisily pubrow _Iregion6_3,   label("  South")                          type(decimal)
+noisily pubrow _Iregion6_4,   label("  Midwest")                        type(decimal)
+noisily pubrow _Iregion6_5,   label("  Southwest")                      type(decimal)
+noisily pubrow _Iregion6_6,   label("  West")                           type(decimal)
+
+noisily pubrow admitpct,      label("Admissions rate (%)")              type(decimal)
+noisily pubrow pcttefhispt,   label("% undergrad Latine")               type(decimal)
+noisily pubrow ftfefwhitt,    label("Full-time first-year enrollment")   type(integer)
+
+noisily display as text "County population age 18 to 24"
+noisily pubrow kcpopwh,       label("  White")                          type(pop)
+noisily pubrow kcpopbl,       label("  Black")                          type(pop)
+noisily pubrow kcpophi,       label("  Hispanic")                       type(pop)
+noisily pubrow kcpopas,       label("  Asian")                          type(pop)
+noisily pubrow kcpopam,       label("  American Indian")                type(pop)
+
+noisily display as text "State population age 18 to 24"
+noisily pubrow kpopwh,        label("  White")                          type(pop)
+noisily pubrow kpopbl,        label("  Black")                          type(pop)
+noisily pubrow kpophi,        label("  Hispanic")                       type(pop)
+noisily pubrow kpopas,        label("  Asian")                          type(pop)
+noisily pubrow kpopam,        label("  American Indian")                type(pop)
+
+noisily display as text "{hline 94}"
+noisily display as text _col(2) "N schools"       _col(45) as result %10.0fc `N1' _col(74) as result %10.0fc `N3'
+noisily display as text _col(2) "N schools/years" _col(45) as result %10.0fc `N2' _col(74) as result %10.0fc `N4'
+noisily display as text "{hline 94}"
+noisily display as text "Note: HSI = Hispanic-Serving Institution."
+noisily display as text ""
+
+}
+
+log close
