@@ -1,0 +1,134 @@
+****************************************************
+* Figure 4 quiet replication setup
+* Creates notebook-compatible data path in temp folder
+****************************************************
+
+clear all
+set more off
+capture log close _all
+graph close _all
+set graphics on
+
+local project "K:/White Flight Data for Stata"
+
+display as text "Setting up temporary Figure 4 workspace..."
+
+capture confirm file "`project'/d_hsi_white_enrollment_final3.dta"
+if _rc {
+    display as error "Could not find:"
+    display as error "`project'/d_hsi_white_enrollment_final3.dta"
+    exit 601
+}
+
+local workdir "`c(tmpdir)'whiteflight_fig4_work"
+
+capture mkdir "`workdir'"
+capture mkdir "`workdir'/data"
+
+copy "`project'/d_hsi_white_enrollment_final3.dta" ///
+     "`workdir'/data/hsi_white_enrollment_final3.dta", replace
+
+cd "`workdir'"
+
+display as result "Temporary workspace ready:"
+pwd
+display as result "Author code can now use: data/hsi_white_enrollment_final3"
+
+****************************************************
+* 3. Run authors' Figure 4 code
+****************************************************
+
+display as text "Running Figure 4 code quietly. This may take a while..."
+
+****************************************************
+* PASTE AUTHORS' FIGURE 4 CODE BELOW THIS LINE
+****************************************************
+
+
+/*
+Paste the GitHub notebook code chunks here.
+
+Keep blocks like this:
+
+qui {
+    use data/hsi_white_enrollment_final3, clear
+    ...
+}
+
+*/
+
+qui {
+    use data/hsi_white_enrollment_final3, clear
+drop if lnftfefwhitt==. 
+drop if year==1990 & hispserve==1
+gen missingpanel=.
+sort unitid year
+bysort unitid: egen maxyear=max(year)
+bysort unitid: egen minyear=min(year)
+bysort unitid (year): replace missingpanel=1 if year[_n-1]!=year-1 | lnftfefwhitt==. | lnftfeftotlt==.
+replace missingpanel=. if year==1990 & lnftfefwhitt!=. & lnftfeftotlt!=.
+bysort unitid: egen missingpanelall=min(missingpanel)
+replace missingpanelall=1 if maxyear!=2019 | minyear !=1990
+bysort unitid: egen alwaystreated=min(hispserve)
+bysort unitid: egen evertreated=max(hispserve)
+drop if alwaystreated==1
+drop if missingpanelall==1
+gen treated=1
+replace treated=0 if year<hispserveyear
+}
+
+
+
+egen gvar=csgvar(treated), tvar(year) ivar(unitid)
+
+
+// Display log 18-24 population by race control variable names. //
+// lnpop* is state level count. lncpop* is county level count
+ds lnpop* lncpop*, varwidth(20)
+
+
+csdid lnftfefwhitt lnpop* lncpop*, ivar(unitid) time(year) gvar(gvar) ///
+        method(reg) agg(simple) long2
+qui csdid_estat event, window(-19 20)
+csdid_plot, style(rcap) scheme(plotplain) ///
+legend(off) title(Panel A: White First Year Enrollment) name(white, replace)
+
+
+****
+
+
+csdid lnftfeftotlt lnpop* lncpop*, ivar(unitid) time(year) gvar(gvar) ///
+        method(reg) agg(simple) long2
+
+
+qui csdid_estat event, window(-19 20)
+csdid_plot, style(rcap) scheme(plotplain) ylabel(-1(.5).5) ///
+legend(off) title(Panel B: Total First Year Enrollment) name(total, replace)
+
+
+****
+
+
+csdid2 lnftfefwhitt lnpop* lncpop*, ivar(unitid) time(year) gvar(gvar) ///
+        method(reg) agg(event) long2
+
+
+tab year if year==gvar
+
+
+
+
+
+****************************************************
+* PASTE AUTHORS' FIGURE 4 CODE ABOVE THIS LINE
+****************************************************
+
+****************************************************
+* 4. Redisplay the most recent graph, if one exists
+****************************************************
+
+capture graph display
+
+capture log close
+
+display as result "Done. If Figure 4 was created, it should be visible in Stata's Graph window."
