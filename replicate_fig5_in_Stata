@@ -1,0 +1,98 @@
+****************************************************
+* Replicate Figure 5
+* White Flight study
+****************************************************
+
+clear all
+set more off
+capture log close
+
+use "K:\White Flight Data for Stata\d_hsi_ca_tx_applications.dta", clear
+
+****************************************************
+* Prepare application panel
+****************************************************
+
+drop if missing(lnWhite_app) | missing(lnpopulationwh)
+
+capture drop hispserveyear
+gen hispserveyear = year if hispserve == 1
+
+capture drop hispserveyearall
+bysort unitid: egen hispserveyearall = min(hispserveyear)
+
+capture drop treated
+gen treated = 0
+replace treated = 1 if year >= hispserveyearall ///
+    & hispserveyearall < .
+
+keep if inrange(year, 2000, 2019)
+
+capture drop maxyear minyear missingpanel missingpanelall
+bysort unitid: egen maxyear = max(year)
+bysort unitid: egen minyear = min(year)
+
+gen missingpanel = .
+bysort unitid (year): replace missingpanel = 1 ///
+    if _n > 1 & year != year[_n-1] + 1
+
+bysort unitid: egen missingpanelall = min(missingpanel)
+replace missingpanelall = 1 if maxyear != 2019 | minyear != 2000
+
+capture drop alwaystreated evertreated
+bysort unitid: egen alwaystreated = min(treated)
+bysort unitid: egen evertreated  = max(treated)
+
+drop if alwaystreated == 1
+drop if missingpanelall == 1
+
+****************************************************
+* Create treatment-cohort variable
+****************************************************
+
+capture drop gvar
+gen gvar = hispserveyearall
+replace gvar = 0 if evertreated == 0
+
+tab year if year == gvar
+
+****************************************************
+* Panel A: White applications
+****************************************************
+
+csdid lnWhite_app lnpop* lncpop*, ///
+    ivar(unitid) time(year) gvar(gvar) ///
+    method(reg) agg(simple) long2
+
+csdid_estat event, window(-9 10)
+
+csdid_plot, style(rcap) scheme(plotplain) ///
+    legend(off) ///
+    title("Panel A: White Applications") ///
+    name(f5a_white_applications, replace)
+
+* graph export figures/f5a_event_white_applications.pdf, replace
+
+****************************************************
+* Panel B: Total applications
+****************************************************
+
+csdid lntot_app lnpop* lncpop*, ///
+    ivar(unitid) time(year) gvar(gvar) ///
+    method(reg) agg(simple) long2
+
+csdid_estat event, window(-9 10)
+
+csdid_plot, style(rcap) scheme(plotplain) ///
+    ylabel(-1(.5).5) ///
+    legend(off) ///
+    title("Panel B: Total Applications") ///
+    name(f5b_total_applications, replace)
+
+* graph export figures/f5b_event_total_applications.pdf, replace
+
+****************************************************
+* Treatment timing check
+****************************************************
+
+tab year if year == gvar
