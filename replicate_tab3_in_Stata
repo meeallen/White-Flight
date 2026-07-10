@@ -1,0 +1,227 @@
+****************************************************
+* Table 6 pipeline test
+* White Flight study
+* Virtual Sites version
+****************************************************
+
+clear all
+set more off
+capture log close
+eststo clear
+
+****************************************************
+* Packages
+****************************************************
+
+capture which reghdfe
+if _rc ssc install reghdfe, replace
+
+capture which eststo
+if _rc ssc install estout, replace
+
+capture which sdid
+if _rc ssc install sdid, replace
+
+capture which csdid2
+if _rc {
+    net install csdid2, ///
+        from("https://friosavila.github.io/stpackages") replace
+}
+
+****************************************************
+* Load data from accessible K: folder
+****************************************************
+
+use "K:\White Flight Data for Stata\d_hsi_ca_tx_applications.dta", clear
+
+****************************************************
+* Confirm required variables and wildcard groups
+****************************************************
+
+describe unitid year hispserve lnWhite_app lnpopulationwh
+
+display as text "Variables selected by lnpop*:"
+ds lnpop*
+
+display as text "Variables selected by lncpop*:"
+ds lncpop*
+
+****************************************************
+* Prepare analysis panel
+****************************************************
+
+drop if missing(lnWhite_app) | missing(lnpopulationwh)
+
+capture drop hispserveyear
+capture drop hispserveyearall
+capture drop treated
+capture drop maxyear
+capture drop minyear
+capture drop missingpanel
+capture drop missingpanelall
+capture drop alwaystreated
+capture drop evertreated
+capture drop gvar
+capture drop SimpleATT
+
+gen hispserveyear = year if hispserve == 1
+bysort unitid: egen hispserveyearall = min(hispserveyear)
+
+gen byte treated = 0
+replace treated = 1 if year >= hispserveyearall ///
+    & !missing(hispserveyearall)
+
+keep if inrange(year, 2000, 2019)
+
+bysort unitid: egen maxyear = max(year)
+bysort unitid: egen minyear = min(year)
+
+* Mark internal gaps in each institution's panel
+gen byte missingpanel = 0
+bysort unitid (year): replace missingpanel = 1 ///
+    if _n > 1 & year != year[_n-1] + 1
+
+bysort unitid: egen byte missingpanelall = max(missingpanel)
+
+* Also require full coverage from 2000 through 2019
+replace missingpanelall = 1 ///
+    if maxyear != 2019 | minyear != 2000
+
+bysort unitid: egen byte alwaystreated = min(treated)
+bysort unitid: egen byte evertreated  = max(treated)
+
+****************************************************
+* Check panel before estimation
+****************************************************
+
+isid unitid year
+
+tab missingpanelall
+tab alwaystreated
+tab evertreated
+tab treated
+count if missing(hispserveyearall)
+
+****************************************************
+* Construct treatment cohort
+****************************************************
+
+egen gvar = csgvar(treated), tvar(year) ivar(unitid)
+
+drop if alwaystreated == 1
+drop if missingpanelall == 1
+
+rename treated SimpleATT
+
+****************************************************
+* Final estimation-sample checks
+****************************************************
+
+isid unitid year
+xtset unitid year
+
+count
+egen tag_unit = tag(unitid)
+count if tag_unit
+drop tag_unit
+
+tab SimpleATT
+tab gvar, missing
+
+****************************************************
+* Model 1: Panel DiD
+****************************************************
+
+display as result "Starting Model 1: Panel DiD"
+
+eststo model1: reghdfe ///
+    lnWhite_app lnpop* lncpop* SimpleATT, ///
+    absorb(unitid year) cluster(unitid)
+
+display as result "Model 1 complete"
+
+****************************************************
+* Model 2: CSDID
+****************************************************
+
+display as result "Starting Model 2: CSDID"
+
+eststo model2: csdid2 ///
+    lnWhite_app SimpleATT lnpop* lncpop*, ///
+    ivar(unitid) time(year) gvar(gvar) ///
+    method(reg) agg(simple) notyet
+
+display as result "Model 2 complete"
+
+****************************************************
+* Inspect cohorts used for placebo SDID
+****************************************************
+
+tab year if gvar == year ///
+    & gvar < 2014 ///
+    & gvar != 2004 ///
+    & gvar != 2003
+
+****************************************************
+* Model 3: SDID bootstrap
+* Use reps(5) only for pipeline testing
+****************************************************
+
+display as result "Starting Model 3: SDID bootstrap"
+
+eststo model3: sdid ///
+    lnWhite_app unitid year SimpleATT, ///
+    vce(bootstrap) ///
+    covariates(lnpop* lncpop*) ///
+    seed(1234) reps(5)
+
+display as result "Model 3 complete"
+
+****************************************************
+* Model 4: SDID placebo
+* Use reps(5) only for pipeline testing
+****************************************************
+
+display as result "Starting Model 4: SDID placebo"
+
+eststo model4: sdid ///
+    lnWhite_app unitid year SimpleATT ///
+    if gvar < 2014 ///
+        & gvar != 2004 ///
+        & gvar != 2003, ///
+    vce(placebo) ///
+    covariates(lnpop* lncpop*) ///
+    seed(1234) reps(5)
+
+display as result "Model 4 complete"
+
+****************************************************
+* Display stored models
+****************************************************
+
+estimates dir
+
+esttab model1 model2 model3 model4, ///
+    star(+ .1 * .05 ** .01 *** .001) ///
+    stats(N_clust N, ///
+        fmt(%9.0fc %9.0fc) ///
+        label("Schools" "N")) ///
+    se(%9.3fc) ///
+    b(%9.3fc) ///
+    label ///
+    mtitle( ///
+        "Panel DiD" ///
+        "CSDID" ///
+        "SDID Bootstrap" ///
+        "SDID Placebo" ///
+    ) ///
+    nonotes ///
+    modelwidth(14)
+
+****************************************************
+* Export deliberately disabled for first test
+****************************************************
+
+* esttab model1 model2 model3 model4 using ///
+*     "K:\White Flight Data for Stata\Table6_applications.rtf", ///
+*     replace
