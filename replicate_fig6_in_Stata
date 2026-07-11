@@ -1,0 +1,158 @@
+****************************************************
+* Replicate Figure 6
+* White admission-rate event study
+* White Flight study
+* Virtual Sites version
+****************************************************
+
+clear all
+set more off
+capture log close
+
+****************************************************
+* Package checks
+****************************************************
+
+capture which drdid
+if _rc ssc install drdid, replace
+
+capture which csdid
+if _rc ssc install csdid, replace
+
+****************************************************
+* Load and prepare data
+****************************************************
+
+quietly {
+
+    use "K:\White Flight Data for Stata\d_hsi_ca_tx_applications.dta", clear
+
+    * Make the file safe to rerun
+    capture drop hispserveyear
+    capture drop hispserveyearall
+    capture drop treated
+    capture drop maxyear
+    capture drop minyear
+    capture drop missingpanel
+    capture drop missingpanelall
+    capture drop alwaystreated
+    capture drop evertreated
+    capture drop gvar
+    capture drop white_adm_rt
+
+    * Preserve the authors' analytic sample restriction
+    drop if lnWhite_app == . | lnpopulationwh == .
+
+    ************************************************
+    * Identify first HSI year and treatment status
+    ************************************************
+
+    gen hispserveyear = year if hispserve == 1
+
+    bysort unitid: egen hispserveyearall = ///
+        min(hispserveyear)
+
+    gen byte treated = 0
+    replace treated = 1 if ///
+        year >= hispserveyearall & ///
+        hispserveyearall < .
+
+    ************************************************
+    * Restrict to the Figure 6 analysis period
+    ************************************************
+
+    keep if inrange(year, 2000, 2019)
+
+    ************************************************
+    * Identify incomplete panels
+    ************************************************
+
+    bysort unitid: egen maxyear = max(year)
+    bysort unitid: egen minyear = min(year)
+
+    gen byte missingpanel = .
+
+    bysort unitid (year): replace missingpanel = 1 ///
+        if year[_n-1] != year - 1
+
+    replace missingpanel = . if year == 2000
+
+    bysort unitid: egen missingpanelall = ///
+        min(missingpanel)
+
+    replace missingpanelall = 1 ///
+        if maxyear != 2019 | minyear != 2000
+
+    ************************************************
+    * Identify always-treated and ever-treated units
+    ************************************************
+
+    bysort unitid: egen alwaystreated = min(treated)
+    bysort unitid: egen evertreated  = max(treated)
+
+    drop if alwaystreated == 1
+    drop if missingpanelall == 1
+
+    ************************************************
+    * Create treatment-cohort variable
+    *
+    * Treated institutions receive their first HSI
+    * year; never-treated institutions receive 0.
+    ************************************************
+
+    gen gvar = hispserveyearall
+    replace gvar = 0 if missing(gvar)
+
+    ************************************************
+    * White admission rate
+    ************************************************
+
+    gen double white_adm_rt = ///
+        White_admit / White_app if White_app > 0
+}
+
+****************************************************
+* Brief sample check
+****************************************************
+
+quietly count if white_adm_rt < .
+
+display as text ///
+    "Nonmissing white admission-rate observations: " ///
+    as result r(N)
+
+****************************************************
+* Callaway-Sant'Anna event-study model
+****************************************************
+
+display as text "Estimating Figure 6 model..."
+
+quietly csdid white_adm_rt lnpop* lncpop*, ///
+    ivar(unitid)                             ///
+    time(year)                               ///
+    gvar(gvar)                               ///
+    method(reg)                              ///
+    agg(simple)                              ///
+    long2
+
+quietly csdid_estat event, window(-9 10)
+
+****************************************************
+* Display Figure 6
+****************************************************
+
+csdid_plot,                            ///
+    style(rcap)                        ///
+    scheme(plotplain)                  ///
+    legend(off)                        ///
+    name(Figure6, replace)
+
+display as result "Figure 6 complete."
+
+****************************************************
+* Do not export in Virtual Sites
+****************************************************
+
+* graph export ///
+*     "K:\White Flight Data for Stata\f6_event_white_admissions.png", ///
+*     replace
