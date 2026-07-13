@@ -1,0 +1,701 @@
+********************************************************************************
+* Replicate Table 2
+* White First-Year Panel Difference-in-Differences Estimates
+* White Flight in Public Higher Education?
+*
+* Publication-faithful version for Stata in UM Virtual Sites
+*
+* Main correction:
+* - Published Model 2 uses CSDID agg(group), not agg(simple).
+*
+* Default Results-window output:
+* - brief startup/sample summary
+* - model progress messages
+* - interim TWFE/CSDID table
+* - final five-model Table 2
+* - brief timer and output-location summary
+* - CURRENTLY SET TO 5 REPS instead of 500 so Sites doesn't time out
+* - Standard errors on models 3 and 4 will be slightly larger than with 500 reps
+* - to change to 500 reps change line "local finalrun" to "1"
+* - at 5 reps, models 3, 4, and 5 each take 20 mins to run in Stata within Virtual Sites (July 2026)
+********************************************************************************
+
+quietly {
+
+    clear all
+    set more off
+    set linesize 150
+    set varabbrev off
+
+    ****************************************************************************
+    * User settings
+    ****************************************************************************
+
+    local project "K:\White Flight Data for Stata"
+
+    * 0 = quick pipeline test with 5 placebo repetitions
+    * 1 = publication-style run with 500 placebo repetitions
+    *
+    * Leave this at 1 for the closest replication of published Table 2.
+    * Change it temporarily to 0 only when testing whether the pipeline runs.
+    local finalrun 0
+
+    local reps 5
+    if `finalrun' == 1 {
+        local reps 500
+    }
+
+    * Optional alternative CSDID estimand:
+    * 0 = do not run
+    * 1 = also calculate agg(simple), approximately -0.254 in authors' notebook
+    *
+    * This sensitivity result is NOT inserted into the published-style Table 2.
+    local run_simple_sensitivity 0
+
+    * Optional diagnostics retained from the authors' notebook:
+    * tabulations and xtdidregress comparison
+    local run_author_diagnostics 0
+
+    ****************************************************************************
+    * Local temporary workspace
+    ****************************************************************************
+
+    local workdir "`c(tmpdir)'whiteflight_t2_work"
+
+    capture mkdir "`workdir'"
+    capture mkdir "`workdir'\tables"
+
+    cd "`workdir'"
+
+    capture log close
+    log using "`workdir'\t2_did_enrollments.log", replace text
+
+    ****************************************************************************
+    * Required packages
+    ****************************************************************************
+
+    capture which ftools
+    if _rc ssc install ftools, replace
+
+    capture which reghdfe
+    if _rc ssc install reghdfe, replace
+
+    capture which esttab
+    if _rc ssc install estout, replace
+
+    capture which sdid
+    if _rc ssc install sdid, replace
+
+    capture which csdid2
+    if _rc {
+        net install csdid2, ///
+            from("https://friosavila.github.io/stpackages") replace
+    }
+
+    ****************************************************************************
+    * Locate the source dataset
+    ****************************************************************************
+
+    local sourcefile ""
+
+    capture confirm file "`project'\data\d_hsi_white_enrollment_final3.dta"
+    if !_rc {
+        local sourcefile "`project'\data\d_hsi_white_enrollment_final3.dta"
+    }
+
+    if "`sourcefile'" == "" {
+        capture confirm file "`project'\d_hsi_white_enrollment_final3.dta"
+        if !_rc {
+            local sourcefile "`project'\d_hsi_white_enrollment_final3.dta"
+        }
+    }
+
+    if "`sourcefile'" == "" {
+        capture confirm file "`project'\data\hsi_white_enrollment_final3.dta"
+        if !_rc {
+            local sourcefile "`project'\data\hsi_white_enrollment_final3.dta"
+        }
+    }
+
+    if "`sourcefile'" == "" {
+        capture confirm file "`project'\hsi_white_enrollment_final3.dta"
+        if !_rc {
+            local sourcefile "`project'\hsi_white_enrollment_final3.dta"
+        }
+    }
+
+    if "`sourcefile'" == "" {
+        noisily display as error ///
+            "Could not find the Table 2 dataset in `project'."
+        capture log close
+        exit 601
+    }
+
+    ****************************************************************************
+    * Copy locally and load
+    ****************************************************************************
+
+    copy "`sourcefile'" ///
+        "`workdir'\hsi_white_enrollment_final3.dta", replace
+
+    use "`workdir'\hsi_white_enrollment_final3.dta", clear
+    compress
+
+    confirm variable unitid year
+    confirm variable hispserve hispserveyear
+    confirm variable lnftfefwhitt lnftfeftotlt
+    confirm variable ftfefhispt admitpct
+
+    ****************************************************************************
+    * Recreate the authors' Table 2 sample
+    ****************************************************************************
+
+    timer clear
+    timer on 1
+
+    drop if lnftfefwhitt == .
+    drop if year == 1990 & hispserve == 1
+
+    gen missingpanel = .
+
+    sort unitid year
+
+    bysort unitid: egen maxyear = max(year)
+    bysort unitid: egen minyear = min(year)
+
+    bysort unitid (year): replace missingpanel = 1 if ///
+        year[_n-1] != year - 1 | ///
+        lnftfefwhitt == . | ///
+        lnftfeftotlt == .
+
+    replace missingpanel = . if ///
+        year == 1990 & ///
+        lnftfefwhitt != . & ///
+        lnftfeftotlt != .
+
+    bysort unitid: egen missingpanelall = min(missingpanel)
+
+    replace missingpanelall = 1 if ///
+        maxyear != 2019 | minyear != 1990
+
+    bysort unitid: egen alwaystreated = min(hispserve)
+    bysort unitid: egen evertreated = max(hispserve)
+
+    drop if alwaystreated == 1
+    drop if missingpanelall == 1
+
+    isid unitid year
+    xtset unitid year
+
+    * Authors' treatment coding
+    gen treated = 1
+    replace treated = 0 if year < hispserveyear
+
+    * Authors' Latine-enrollment transformation
+    capture drop ln2ftfefhispt
+    gen ln2ftfefhispt = log(ftfefhispt + 1)
+
+    * Authors' treatment-cohort construction
+    egen gvar = csgvar(treated), tvar(year) ivar(unitid)
+
+    * Retained from the authors' notebook
+    bysort unitid: egen treatment = max(treated)
+
+    * The authors rename the post-HSI treatment indicator SimpleATT.
+    * This variable name is separate from CSDID's agg(simple) option.
+    rename treated SimpleATT
+
+    * Freeze wildcard expansion so all models use the same base covariate list.
+    unab basecovars : lnpop* lncpop*
+    local basecovars `basecovars'
+
+    * Base-sample counts
+    tempvar tagbase
+
+    egen byte `tagbase' = tag(unitid)
+    count if `tagbase'
+    local schools_base = r(N)
+
+    local N_base = _N
+
+    drop `tagbase'
+
+    timer off 1
+
+    ****************************************************************************
+    * Optional author diagnostics
+    ****************************************************************************
+
+    if `run_author_diagnostics' == 1 {
+
+        tab year
+        tab gvar if gvar == year
+
+        xtdidregress ///
+            (lnftfefwhitt `basecovars') ///
+            (SimpleATT), ///
+            group(unitid) time(year)
+    }
+
+    ****************************************************************************
+    * Count the complete-case CSDID estimation sample
+    ****************************************************************************
+
+    tempvar misscsdid usecsdid tagcsdid
+
+    egen int `misscsdid' = ///
+        rowmiss(unitid year gvar lnftfefwhitt `basecovars')
+
+    gen byte `usecsdid' = (`misscsdid' == 0)
+
+    count if `usecsdid'
+    local N_csdid = r(N)
+
+    egen byte `tagcsdid' = tag(unitid) if `usecsdid'
+    count if `tagcsdid'
+    local schools_csdid = r(N)
+
+    drop `misscsdid' `usecsdid' `tagcsdid'
+
+    eststo clear
+}
+
+********************************************************************************
+* Small e-class wrapper used only to standardize the final table row
+********************************************************************************
+
+capture program drop post_t2_result
+
+program define post_t2_result, eclass
+
+    args coef stderr nobs nschools dfr
+
+    tempname b V
+
+    matrix `b' = (`coef')
+    matrix colnames `b' = ATT
+
+    matrix `V' = (`stderr'^2)
+    matrix rownames `V' = ATT
+    matrix colnames `V' = ATT
+
+    ereturn post `b' `V', obs(`nobs')
+    ereturn scalar Schools = `nschools'
+
+    if "`dfr'" != "" {
+        ereturn scalar df_r = `dfr'
+    }
+
+    ereturn local cmd "post_t2_result"
+end
+
+display as text "Published Table 2 replication started"
+display as text "Dataset: `sourcefile'"
+display as text ///
+    "Base sample: `schools_base' schools and `N_base' observations"
+display as text "SDID placebo repetitions: `reps'"
+display as text ""
+
+********************************************************************************
+* Model 1: Panel DID / TWFE
+********************************************************************************
+
+display as text "Running Model 1 of 5: TWFE Panel DiD..."
+
+quietly {
+
+    timer on 3
+
+    reghdfe lnftfefwhitt SimpleATT `basecovars', ///
+        absorb(unitid year) cluster(unitid)
+
+    local b1 = _b[SimpleATT]
+    local se1 = _se[SimpleATT]
+    local n1 = e(N)
+    local schools1 = e(N_clust)
+    local dfr1 = e(df_r)
+
+    post_t2_result `b1' `se1' `n1' `schools1' `dfr1'
+    eststo twfe
+
+    estimates save "`workdir'\tables\t2_twfe.ster", replace
+
+    capture copy "`workdir'\tables\t2_twfe.ster" ///
+        "`project'\t2_twfe.ster", replace
+
+    timer off 3
+}
+
+display as result ///
+    " Complete: ATT = " %7.3f `b1' ", SE = " %7.3f `se1'
+
+********************************************************************************
+* Model 2: CSDID cohort/group aggregation
+*
+* This is the aggregation used in the PUBLISHED Table 2.
+* Expected result is approximately ATT = -0.133, SE = 0.028.
+********************************************************************************
+
+display as text ///
+    "Running Model 2 of 5: CSDID, published agg(group)..."
+
+quietly {
+
+    timer on 4
+
+    csdid2 lnftfefwhitt `basecovars', ///
+        ivar(unitid) time(year) gvar(gvar) ///
+        method(reg) agg(group)
+
+    tempname b2mat V2mat
+
+    matrix `b2mat' = e(b)
+    matrix `V2mat' = e(V)
+
+    * agg(group) should store the overall published estimate as GAverage.
+    local c2 = colnumb(`b2mat', "GAverage")
+
+    * Defensive fallback for versions that return only one aggregate column.
+    if (missing(`c2') | `c2' == 0) & colsof(`b2mat') == 1 {
+        local c2 = 1
+    }
+
+    if missing(`c2') | `c2' == 0 {
+        noisily display as error ///
+            "Could not identify GAverage in the CSDID results."
+        noisily matrix list `b2mat'
+        capture log close
+        exit 498
+    }
+
+    local b2 = `b2mat'[1,`c2']
+    local se2 = sqrt(`V2mat'[`c2',`c2'])
+
+    post_t2_result `b2' `se2' `N_csdid' `schools_csdid'
+    eststo csdid
+
+    estimates save "`workdir'\tables\t2_csdid_group.ster", replace
+
+    capture copy "`workdir'\tables\t2_csdid_group.ster" ///
+        "`project'\t2_csdid_group.ster", replace
+
+    capture csdid2, clear
+
+    timer off 4
+}
+
+display as result ///
+    " Complete: ATT = " %7.3f `b2' ", SE = " %7.3f `se2'
+
+********************************************************************************
+* Optional sensitivity: CSDID simple aggregation
+*
+* This is the later repository-notebook result, approximately -0.254.
+* It is deliberately excluded from the published-style final Table 2.
+********************************************************************************
+
+if `run_simple_sensitivity' == 1 {
+
+    display as text ""
+    display as text ///
+        "Running optional CSDID sensitivity: agg(simple)..."
+
+    quietly {
+
+        timer on 9
+
+        csdid2 lnftfefwhitt `basecovars', ///
+            ivar(unitid) time(year) gvar(gvar) ///
+            method(reg) agg(simple)
+
+        tempname bsimple Vsimple
+
+        matrix `bsimple' = e(b)
+        matrix `Vsimple' = e(V)
+
+        local csimple = colnumb(`bsimple', "SimpleATT")
+
+        if (missing(`csimple') | `csimple' == 0) & ///
+            colsof(`bsimple') == 1 {
+            local csimple = 1
+        }
+
+        if missing(`csimple') | `csimple' == 0 {
+            noisily display as error ///
+                "Could not identify SimpleATT in agg(simple) results."
+            noisily matrix list `bsimple'
+            capture log close
+            exit 498
+        }
+
+        local bs = `bsimple'[1,`csimple']
+        local ses = sqrt(`Vsimple'[`csimple',`csimple'])
+
+        post_t2_result `bs' `ses' `N_csdid' `schools_csdid'
+        eststo csdid_simple_sensitivity
+
+        estimates save ///
+            "`workdir'\tables\t2_csdid_simple_sensitivity.ster", replace
+
+        capture copy ///
+            "`workdir'\tables\t2_csdid_simple_sensitivity.ster" ///
+            "`project'\t2_csdid_simple_sensitivity.ster", replace
+
+        capture csdid2, clear
+
+        timer off 9
+    }
+
+    display as result ///
+        " Optional simple ATT = " %7.3f `bs' ///
+        ", SE = " %7.3f `ses'
+}
+
+display as text ""
+display as text "Interim published Table 2 check"
+
+esttab twfe csdid, ///
+    cells(b(star fmt(3)) se(par fmt(3))) ///
+    star(+ .10 * .05 ** .01 *** .001) ///
+    stats(Schools N, fmt(%9.0fc %9.0fc) ///
+        labels("Schools" "N")) ///
+    coeflabels(ATT "ATT") ///
+    mtitle("Panel DID/TWFE" "CSDID") ///
+    nonotes modelwidth(20)
+
+********************************************************************************
+* Model 3: SDID placebo
+********************************************************************************
+
+display as text ""
+display as text "Running Model 3 of 5: SDID placebo..."
+
+quietly {
+
+    timer on 5
+
+    sdid lnftfefwhitt unitid year SimpleATT, ///
+        vce(placebo) ///
+        covariates(`basecovars') ///
+        seed(1234) reps(`reps')
+
+    local b3 = e(ATT)
+    local se3 = e(se)
+    local n3 = e(N)
+    local schools3 = e(N_clust)
+
+    post_t2_result `b3' `se3' `n3' `schools3'
+    eststo sdid1
+
+    estimates save "`workdir'\tables\t2_sdid1.ster", replace
+
+    capture copy "`workdir'\tables\t2_sdid1.ster" ///
+        "`project'\t2_sdid1.ster", replace
+
+    timer off 5
+}
+
+display as result ///
+    " Complete: ATT = " %7.3f `b3' ", SE = " %7.3f `se3'
+
+********************************************************************************
+* Model 4: SDID placebo + Latine enrollment covariate
+********************************************************************************
+
+display as text ///
+    "Running Model 4 of 5: SDID + Latine enrollment..."
+
+quietly {
+
+    timer on 6
+
+    sdid lnftfefwhitt unitid year SimpleATT, ///
+        vce(placebo) ///
+        covariates(`basecovars' ln2ftfefhispt) ///
+        seed(1234) reps(`reps')
+
+    local b4 = e(ATT)
+    local se4 = e(se)
+    local n4 = e(N)
+    local schools4 = e(N_clust)
+
+    post_t2_result `b4' `se4' `n4' `schools4'
+    eststo sdid2
+
+    estimates save "`workdir'\tables\t2_sdid2.ster", replace
+
+    capture copy "`workdir'\tables\t2_sdid2.ster" ///
+        "`project'\t2_sdid2.ster", replace
+
+    timer off 6
+}
+
+display as result ///
+    " Complete: ATT = " %7.3f `b4' ", SE = " %7.3f `se4'
+
+********************************************************************************
+* Model 5: SDID placebo + Latine enrollment + admissions
+********************************************************************************
+
+display as text ///
+    "Running Model 5 of 5: SDID + Latine + admissions..."
+
+quietly {
+
+    timer on 7
+
+    preserve
+
+    * Authors' Model 5 sample restrictions
+    drop if year < 2001
+
+    * Drop the old panel-level flag and rebuild it to include admitpct.
+    drop missingpanelall
+
+    replace missingpanel = 1 if admitpct == .
+
+    bysort unitid: egen missingpanelall = min(missingpanel)
+
+    drop if missingpanelall == 1
+
+    drop alwaystreated
+
+    bysort unitid: egen alwaystreated = min(SimpleATT)
+
+    drop if alwaystreated == 1
+
+    isid unitid year
+    xtset unitid year
+
+    timer off 7
+    timer on 8
+
+    sdid lnftfefwhitt unitid year SimpleATT, ///
+        vce(placebo) ///
+        covariates(`basecovars' ln2ftfefhispt admitpct) ///
+        seed(1234) reps(`reps')
+
+    local b5 = e(ATT)
+    local se5 = e(se)
+    local n5 = e(N)
+    local schools5 = e(N_clust)
+
+    post_t2_result `b5' `se5' `n5' `schools5'
+    eststo sdid3
+
+    estimates save "`workdir'\tables\t2_sdid3.ster", replace
+
+    capture copy "`workdir'\tables\t2_sdid3.ster" ///
+        "`project'\t2_sdid3.ster", replace
+
+    timer off 8
+
+    restore
+}
+
+display as result ///
+    " Complete: ATT = " %7.3f `b5' ", SE = " %7.3f `se5'
+
+********************************************************************************
+* Final published-style Table 2
+********************************************************************************
+
+display as text ""
+display as text "Final published-style Table 2"
+
+esttab twfe csdid sdid1 sdid2 sdid3, ///
+    cells(b(star fmt(3)) se(par fmt(3))) ///
+    star(+ .10 * .05 ** .01 *** .001) ///
+    stats(Schools N, fmt(%9.0fc %9.0fc) ///
+        labels("Schools" "N")) ///
+    coeflabels(ATT "ATT") ///
+    mtitle("Panel DID/TWFE" ///
+        "CSDID" ///
+        "SDID placebo" ///
+        "SDID placebo + Latine" ///
+        "SDID placebo + Latine + admissions") ///
+    nonotes modelwidth(22)
+
+********************************************************************************
+* Publication-target diagnostic
+********************************************************************************
+
+display as text ""
+display as text "Published Table 2 target values:"
+display as text ///
+    " M1 -0.062 (0.034); M2 -0.133 (0.028); M3 -0.171 (0.053)"
+display as text ///
+    " M4 -0.160 (0.050); M5 -0.080 (0.035)"
+display as text ///
+    " Published samples: 469/14,070 for M1-M4; 371/7,049 for M5"
+
+********************************************************************************
+* Export final table and log
+********************************************************************************
+
+quietly {
+
+    esttab twfe csdid sdid1 sdid2 sdid3 using ///
+        "`workdir'\tables\t2_did_enrollments.rtf", ///
+        cells(b(star fmt(3)) se(par fmt(3))) ///
+        star(+ .10 * .05 ** .01 *** .001) ///
+        stats(Schools N, fmt(%9.0fc %9.0fc) ///
+            labels("Schools" "N")) ///
+        coeflabels(ATT "ATT") ///
+        mtitle("Panel DID / TWFE" ///
+            "CSDID" ///
+            "SDID Placebo" ///
+            "SDID Placebo Latine Control" ///
+            "SDID Placebo Latine, Admissions Controls") ///
+        nonotes modelwidth(22) replace
+
+    * K: root is more reliable than a deeper tables subfolder
+    * in UM Virtual Sites.
+    capture copy "`workdir'\tables\t2_did_enrollments.rtf" ///
+        "`project'\t2_did_enrollments.rtf", replace
+
+    local rtfcopyrc = _rc
+
+    * Also attempt the original tables subfolder silently.
+    capture mkdir "`project'\tables"
+
+    capture copy "`workdir'\tables\t2_did_enrollments.rtf" ///
+        "`project'\tables\t2_did_enrollments.rtf", replace
+
+    * Save the log after all estimation output has been written.
+    log close
+
+    capture copy "`workdir'\t2_did_enrollments.log" ///
+        "`project'\t2_did_enrollments.log", replace
+
+    local logcopyrc = _rc
+}
+
+display as text ""
+display as text "Timer summary:"
+
+timer list 1 3 4 5 6 7 8
+
+if `run_simple_sensitivity' == 1 {
+    timer list 9
+}
+
+display as text ""
+
+if `rtfcopyrc' == 0 {
+    display as result ///
+        "RTF table saved to: `project'\t2_did_enrollments.rtf"
+}
+else {
+    display as error ///
+        "The RTF table was created locally but could not be copied to K:."
+}
+
+if `logcopyrc' == 0 {
+    display as result ///
+        "Log saved to: `project'\t2_did_enrollments.log"
+}
+else {
+    display as error ///
+        "The log was created locally but could not be copied to K:."
+}
